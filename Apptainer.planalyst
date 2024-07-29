@@ -1,0 +1,77 @@
+# Stage 1: Compile the planner
+Bootstrap: docker
+From: ubuntu:24.04
+Stage: build
+
+%files
+    . tools/
+
+%post
+    ## Install all necessary dependencies.
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends \
+        cmake g++ make python3.12 git bison flex ninja-build cargo ca-certificates pkg-config \
+        libboost-all-dev libgmp-dev \
+        libtbb-dev libhwloc-dev libboost-program-options-dev
+
+    ## Remove experiments
+    rm -r /tools/experiments/
+
+    ## Clean up scripts folder
+    find /tools/scripts/ -type f ! -name '*.py' -delete
+
+    ## Build Madagascar
+    cd /tools/madagascar/
+    make clean
+    ./build
+    cd ..
+
+    ## Build d4v2
+    cd /tools/d4v2/
+    ./clean.sh
+    ./build.sh
+    cd ..
+
+    ## Build mt-kahypar
+    cd /tools/mt-kahypar/
+    rm -rf build
+    ./build.sh
+    cd build/
+    make install.mtkahypar -j 8
+    cd ../../
+
+    ## Build d-dnnf-reasoner
+    cd /tools/d-dnnf-reasoner/
+    cargo clean
+    cargo build --release --features d4
+    cd ..
+
+# Stage 2: Run the planner
+Bootstrap: docker
+From: ubuntu:24.04
+Stage: run
+
+%files from build 
+    /tools/mt-kahypar/build/lib /tools/mt-kahypar/build/lib
+    /tools/madagascar/Mp /tools/Mp
+    /tools/d4v2/build/d4 /tools/d4
+    /tools/d-dnnf-reasoner/target/release/ddnnife /tools/ddnnife
+    /tools/scripts/utils.py /tools/utils.py
+    /tools/scripts/planalyst.py /tools/planalyst.py 
+
+%post
+    apt-get update
+    apt-get -y install --no-install-recommends python3.12 \
+        libboost-all-dev libgmp-dev libtbb-dev libhwloc-dev libboost-program-options-dev
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    export LD_LIBRARY_PATH=/tools/mt-kahypar/build/lib:$LD_LIBRARY_PATH
+    export PATH=/tools/:$PATH
+
+%runscript
+    #!/bin/bash
+
+    set -euo pipefail
+
+    python3.12 /tools/planalyst.py "$@"
